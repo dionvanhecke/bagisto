@@ -1,43 +1,71 @@
-# Base image met PHP FPM
-FROM php:8.2-fpm
+# main image
+FROM php:8.3-fpm
 
-# Set working directory
-WORKDIR /var/www/html
-
-# --- Install system dependencies ---
+# installing main dependencies
 RUN apt-get update && apt-get install -y \
+    git \
+    ffmpeg \
+    procps
+
+# installing unzip dependencies
+RUN apt-get install -y \
+    libzip-dev \
+    zlib1g-dev \
+    unzip
+
+# gd extension configure and install
+RUN apt-get install -y \
     libfreetype6-dev \
+    libicu-dev \
+    libgmp-dev \
     libjpeg62-turbo-dev \
     libpng-dev \
-    libonig-dev \
-    libicu-dev \
-    libzip-dev \
-    zip \
-    unzip \
-    git \
-    curl \
-    npm \
-    && docker-php-ext-install calendar intl gd pdo_mysql zip
+    libwebp-dev \
+    libxpm-dev
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp && docker-php-ext-install gd
 
-# --- Install Composer ---
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+# imagick extension configure and install
+RUN apt-get install -y libmagickwand-dev \
+    && pecl install imagick \
+    && docker-php-ext-enable imagick
 
-# --- Copy app files ---
-COPY . .
+# intl extension configure and install
+RUN docker-php-ext-configure intl && docker-php-ext-install intl
 
-# --- Install PHP dependencies ---
-RUN composer install --no-interaction --optimize-autoloader --no-dev
+# other extensions install
+RUN docker-php-ext-install bcmath calendar exif gmp mysqli pdo pdo_mysql zip
 
-# --- Install Node dependencies & build frontend ---
-RUN npm install
-RUN npm run build
+# installing composer
+COPY --from=composer:2.7 /usr/bin/composer /usr/local/bin/composer
 
-# --- Set permissions ---
-RUN chown -R www-data:www-data /var/www/html \
-    && chmod -R 755 /var/www/html/storage /var/www/html/bootstrap/cache
+# installing node js
+COPY --from=node:23 /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:23 /usr/local/bin/node /usr/local/bin/node
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 
-# --- Expose port ---
-EXPOSE 9000
+# installing global node dependencies
+RUN npm install -g npx
+RUN npm install -g laravel-echo-server
 
-# --- Start PHP-FPM ---
-CMD ["php-fpm"]
+# arguments
+ARG container_project_path
+ARG uid
+ARG user
+
+# copy php-fpm pool configuration
+COPY ./.configs/nginx/pools/www.cnf /usr/local/etc/php-fpm.d/www.conf
+
+# adding user
+RUN useradd -G www-data,root -u $uid -d /home/$user $user
+RUN mkdir -p /home/$user/.composer && \
+    chown -R $user:$user /home/$user
+
+# setting up project from `src` folder
+RUN chmod -R 775 $container_project_path
+RUN chown -R $user:www-data $container_project_path
+
+# changing user
+USER $user
+
+# setting work directory
+WORKDIR $container_project_path
